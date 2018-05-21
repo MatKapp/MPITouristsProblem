@@ -19,22 +19,24 @@ typedef enum { false, true } bool;
 #define NACKTAG 1
 #define REQUESTTAG 2
 #define GROUPSIZE 2
-#define MESSAGESIZE 4
+#define GROUP_ID 4
+#define MESSAGESIZE 5
 #define PENDINGREQUESTSSIZE 100
 #define PENDINGREQUESTREQUESTTYPE 1
 #define PENDINGREQUESTMPISOURCE 2
 #define ADDITIONALMESSAGESIZE 2
 
 
-void MyBcast(void* data, int count, MPI_Datatype datatype, int tag, MPI_Comm communicator, int *lamportTime) 
+void MyBcast(void* data, int count, MPI_Datatype datatype, int tag, MPI_Comm communicator, int *lamportTime, int *requestLamportTime) 
 {
     int worldRank, worldSize;
     MPI_Comm_rank(communicator, &worldRank);
     MPI_Comm_size(communicator, &worldSize);
+    *lamportTime += 1;
+    *requestLamportTime = *lamportTime;
 
     for (int i = 0; i < worldSize; i++) 
     {
-        // *lamportTime += 1;
 
         if (i != worldRank) 
         {        
@@ -51,7 +53,9 @@ void HandleMessages(bool    hasGroup,
                     int     *receivedAcks,
                     int     *actualGroupSize, 
                     int     **pendingRequests, 
-                    int     *numberOfPendingRequests)
+                    int     *numberOfPendingRequests,
+                    int     *requestLamportTime,
+                    int     *actualGroupId)
 {
     int message[MESSAGESIZE];
     int answer[MESSAGESIZE];
@@ -68,7 +72,11 @@ void HandleMessages(bool    hasGroup,
         MPI_ANY_SOURCE, 
         MPI_ANY_TAG,    
         MPI_COMM_WORLD, 
-        &status);       
+        &status);
+    
+    //updating lamport time
+    *myLamportTime = (*myLamportTime >= message[LAMPORTTIME]) ? *myLamportTime : message[LAMPORTTIME];
+    *myLamportTime += 1;
 
     switch (status.MPI_TAG)
     {
@@ -78,16 +86,14 @@ void HandleMessages(bool    hasGroup,
             {                    
                 case FORGROUP:
                     
-                    if (message[LAMPORTTIME] < *myLamportTime || hasGroup == true)
+                    if (message[LAMPORTTIME] < *requestLamportTime || hasGroup == true)
                     {
-                        //updating lamport time
-                        // *myLamportTime = (*myLamportTime >= message[LAMPORTTIME]) ? *myLamportTime : message[LAMPORTTIME];
-                        // *myLamportTime += 1;
 
                         answer[REQUESTID] = message[REQUESTID];
-                        answer[GROUPSIZE] = *actualGroupSize;                  
-                        printf("Wysylam ACKS %d do %d--------------\n", processId, status.MPI_SOURCE);
-                        // *myLamportTime += 1;
+                        answer[GROUPSIZE] = *actualGroupSize;
+                        answer[GROUP_ID] = *actualGroupId;              
+                        //printf("Wysylam ACKS %d do %d--------------\n", processId, status.MPI_SOURCE);
+                        *myLamportTime += 1;
                         MPI_Send(&answer,
                                 MESSAGESIZE,              
                                 MPI_INT,                                        /* data item is an integer */
@@ -112,8 +118,20 @@ void HandleMessages(bool    hasGroup,
             break;
 
         case ACKTAG:
-            printf("+++++++++++++++Dostałem ACK %d od %d z rozmiarem grupy %d\n", processId, status.MPI_SOURCE, message[GROUPSIZE]);                    
-            *actualGroupSize = (*actualGroupSize >= message[GROUPSIZE]) ? *actualGroupSize : message[GROUPSIZE];
+            //printf("+++++++++++++++Dostałem ACK %d od %d z rozmiarem grupy %d\n", processId, status.MPI_SOURCE, message[GROUPSIZE]);
+            
+            if (message[GROUP_ID] == *actualGroupId)
+            {
+                *actualGroupSize = (*actualGroupSize >= message[GROUPSIZE]) ? *actualGroupSize : message[GROUPSIZE];
+            }                  
+            else
+            {
+                if (message[GROUP_ID] > *actualGroupId)
+                {
+                    *actualGroupSize = message[GROUPSIZE];
+                    *actualGroupId = message[GROUP_ID];
+                }
+            }
             *receivedAcks += 1;
             break;
     }
@@ -123,7 +141,9 @@ void RespondToPendingGroup(int **pendingRequests,
                         int *numberOfPendingRequests,
                         int *myLamportTime, 
                         bool hasGroup, 
-                        int *actualGroupSize){
+                        int *actualGroupSize,
+                        int *requestLamportTime,
+                        int *actualGroupId){
 
     int answer[MESSAGESIZE];
     int processId;
@@ -137,14 +157,15 @@ void RespondToPendingGroup(int **pendingRequests,
                                    
                 case FORGROUP:
                     
-                    if (pendingRequests[i][LAMPORTTIME] <= *myLamportTime || hasGroup == true)
+                    if (pendingRequests[i][LAMPORTTIME] <= *requestLamportTime || hasGroup == true)
                     {
                         answer[REQUESTID] = pendingRequests[i][REQUESTID];
-                        answer[GROUPSIZE] = *actualGroupSize;                  
-                        printf("Wysylam ACKS %d do %d-------------- rozmiar grupy %d\n", processId,
-                                                                                     pendingRequests[i][MESSAGESIZE + ADDITIONALMESSAGESIZE - PENDINGREQUESTMPISOURCE],
-                                                                                     *actualGroupSize);
-                        // *myLamportTime += 1;
+                        answer[GROUPSIZE] = *actualGroupSize;                
+                        answer[GROUP_ID] = *actualGroupId;  
+                        //printf("Wysylam ACKS %d do %d-------------- rozmiar grupy %d\n", processId,
+                        //                                                             pendingRequests[i][MESSAGESIZE + ADDITIONALMESSAGESIZE - PENDINGREQUESTMPISOURCE],
+                        //                                                             *actualGroupSize);
+                        *myLamportTime += 1;
                         MPI_Send(&answer,
                                 MESSAGESIZE,              
                                 MPI_INT,                                        
@@ -171,16 +192,17 @@ int main(int argc, char **argv)
     int numberOfTourists = atoi(argv[1]);
     int numberOfGroups = 2;
     int lamportTime = INT_MAX;
+    int requestLamportTime;
     bool hasGroup = false;
     int processId, size;
     int request[MESSAGESIZE];
     int numberOfElementsToSend = 0;
     int receivedAcks = 0;
     int actualGroupSize = 0;
-    int maxGroupSize = 0;
-    int groupSize = atoi(argv[2]);
+    int maxGroupSize = atoi(argv[2]);
     int **pendingRequests;
     int numberOfPendingRequests = 0;
+    int actualGroupId = 0;
 
     // allocate an "array of arrays" of int
     pendingRequests = (int**)malloc( PENDINGREQUESTSSIZE * sizeof(int*) ) ;
@@ -192,28 +214,35 @@ int main(int argc, char **argv)
         pendingRequests[row] = (int*)malloc( (MESSAGESIZE + ADDITIONALMESSAGESIZE)*sizeof(int) ) ;
     }
     // initializing values to send
-    request[PROCESSID] = processId;
-    request[REQUESTTYPE] = FORGROUP;
-    request[REQUESTID] = myRequestId;
     MPI_Init(&argc, &argv);
     MPI_Status status;
     MPI_Comm_rank(MPI_COMM_WORLD, &processId);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
-    lamportTime = processId; 
+    lamportTime = processId;
+    request[PROCESSID] = processId;
+    request[REQUESTTYPE] = FORGROUP;
+    request[REQUESTID] = myRequestId; 
     request[LAMPORTTIME] = lamportTime;
-    MyBcast(&request, MESSAGESIZE, MPI_INT, REQUESTTAG, MPI_COMM_WORLD, &lamportTime);
+    MyBcast(&request, MESSAGESIZE, MPI_INT, REQUESTTAG, MPI_COMM_WORLD, &lamportTime, &requestLamportTime);
 
     while (receivedAcks < numberOfTourists - 1)
     {
-        HandleMessages(hasGroup, &lamportTime, &receivedAcks, &actualGroupSize, pendingRequests, &numberOfPendingRequests);
+        HandleMessages(hasGroup, &lamportTime, &receivedAcks, &actualGroupSize, pendingRequests, &numberOfPendingRequests, &requestLamportTime, &actualGroupId);
     }
     hasGroup = true;
     actualGroupSize += 1;
-    printf("Mam grupe ziomek __________________________________________%d, actual group size: %d\n", processId, actualGroupSize);
+
+    printf("Mam grupe ziomek __________________________________________%d, actual group id: %d, group size: %d\n", processId, actualGroupId, actualGroupSize);
+    
+    if (actualGroupSize >= maxGroupSize)
+    {
+        actualGroupId += 1;
+        actualGroupSize = 0;
+    }
 
     while (1==1){
-        RespondToPendingGroup(pendingRequests, &numberOfPendingRequests, &lamportTime, hasGroup, &actualGroupSize);
-        HandleMessages(hasGroup, &lamportTime, &receivedAcks, &actualGroupSize, pendingRequests, &numberOfPendingRequests);
+        RespondToPendingGroup(pendingRequests, &numberOfPendingRequests, &lamportTime, hasGroup, &actualGroupSize, &requestLamportTime, &actualGroupId);
+        HandleMessages(hasGroup, &lamportTime, &receivedAcks, &actualGroupSize, pendingRequests, &numberOfPendingRequests, &requestLamportTime, &actualGroupId);
     }
     MPI_Finalize();
 }

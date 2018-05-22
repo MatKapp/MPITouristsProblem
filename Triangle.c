@@ -1,17 +1,24 @@
 #include "declarations.h"
-    
 
-void myBcast(MPI_Datatype datatype, int tag, MPI_Comm communicator) 
+
+bool checkGuideAvailability(int guideId, int requestLamportTime){
+    if(myRequestedGuideId == guideId &&  myRequestLamportTime < requestLamportTime)
+    {
+        return false;
+    }
+    if(guides[guideId].isBusy && guides[guideId].isBeaten)
+    {
+        return false;
+    }
+    return true;
+}
+
+
+void myBcast(int *request, MPI_Datatype datatype, int tag, MPI_Comm communicator) 
 {
     // Increment lamport time and set request lamport time
     lamportTime += 1;
-    requestLamportTime = lamportTime;
-
-    // Initialize request that will be sent
-    int request[MESSAGE_SIZE];
-    request[PROCESS_ID] = processId;
-    request[REQUEST_TYPE] = FOR_GROUP;
-    request[REQUEST_ID] = myRequestId; 
+    myRequestLamportTime = lamportTime;
     request[LAMPORT_TIME] = lamportTime;
 
     // Send request for all other processes / tourists
@@ -24,12 +31,54 @@ void myBcast(MPI_Datatype datatype, int tag, MPI_Comm communicator)
     }
 }
 
+void askForGroup(){
+    // Initialize request that will be sent
+    int request[MESSAGE_SIZE];
+    request[PROCESS_ID] = processId;
+    request[REQUEST_TYPE] = FOR_GROUP;
+    request[REQUEST_ID] = myRequestId; 
 
-void handleMessages(int **pendingRequests)
+    // Ask for group
+    myBcast(request, MPI_INT, REQUEST_TAG, MPI_COMM_WORLD);
+}
+
+void askForGuide(int guideId){
+    // Initialize request that will be sent
+    int request[MESSAGE_SIZE];
+    request[PROCESS_ID] = processId;
+    request[REQUEST_TYPE] = FOR_GUIDE;
+    request[REQUEST_ID] = myRequestId; 
+    request[GUIDE_ID] = guideId;
+
+    // Ask for guide
+    myRequestedGuideId = guideId;
+    myBcast(request, MPI_INT, REQUEST_TAG, MPI_COMM_WORLD);
+}
+
+// Respond with ACK if tag == ACK_TAG
+// Respond with NACK if tag == NACK_TAG
+void respond(MPI_Status status, int requestId, int tag){
+    int answer[MESSAGE_SIZE];
+    answer[REQUEST_ID] = requestId;
+    answer[GROUP_SIZE] = actualGroupSize;
+    answer[GROUP_ID] = actualGroupId;              
+
+    // Increment lamport time and send response
+    lamportTime += 1;
+    MPI_Send(&answer,
+            MESSAGE_SIZE,              
+            MPI_INT,                                        /* data item is an integer */
+            status.MPI_SOURCE,                              /* destination process rank */
+            tag,                                         /* user chosen message tag */
+            MPI_COMM_WORLD);                                /* always use this */               
+}
+
+void handleMessages()
 {
     int message[MESSAGE_SIZE];
     int answer[MESSAGE_SIZE];
     int flag; 
+    int guideId;
     MPI_Status status;
 
     // Receive message
@@ -42,6 +91,7 @@ void handleMessages(int **pendingRequests)
         MPI_ANY_TAG,    
         MPI_COMM_WORLD, 
         &status);
+    int requestId = message[REQUEST_ID];
     
     // Increment lamport time
     lamportTime = (lamportTime >= message[LAMPORT_TIME]) ? lamportTime : message[LAMPORT_TIME];
@@ -55,21 +105,10 @@ void handleMessages(int **pendingRequests)
             switch (message[REQUEST_TYPE])
             {                    
                 case FOR_GROUP:
-
-                    if (message[LAMPORT_TIME] < requestLamportTime || hasGroup == true)
+                    if (message[LAMPORT_TIME] < myRequestLamportTime || hasGroup == true)
                     {
-                        answer[REQUEST_ID] = message[REQUEST_ID];
-                        answer[GROUP_SIZE] = actualGroupSize;
-                        answer[GROUP_ID] = actualGroupId;              
-
-                        // Increment lamport time and send response
-                        lamportTime += 1;
-                        MPI_Send(&answer,
-                                MESSAGE_SIZE,              
-                                MPI_INT,                                        /* data item is an integer */
-                                status.MPI_SOURCE,                              /* destination process rank */
-                                ACK_TAG,                                         /* user chosen message tag */
-                                MPI_COMM_WORLD);                                /* always use this */
+                        // Respond with ACK
+                        respond(status, requestId, GR_ACK_TAG);
                     }
                     else
                     {
@@ -84,11 +123,22 @@ void handleMessages(int **pendingRequests)
                         numberOfPendingRequests += 1;
                     }
                     break;
+
+                case FOR_GUIDE:
+                    guideId = message[GUIDE_ID];
+                    if(true == checkGuideAvailability(guideId, message[LAMPORT_TIME])){
+                        // Respond with ACK
+                        respond(status, requestId, GU_ACK_TAG);
+                    }
+                    else{
+                        // Respond with NACK
+                        respond(status, requestId, GU_NACK_TAG);
+                    }
+                    break;
             }
             break;
 
-        case ACK_TAG:     
-
+        case GR_ACK_TAG:     
             if (message[GROUP_ID] == actualGroupId)
             {
                 actualGroupSize = (actualGroupSize >= message[GROUP_SIZE]) ? actualGroupSize : message[GROUP_SIZE];
@@ -103,10 +153,23 @@ void handleMessages(int **pendingRequests)
             }
             receivedAcks += 1;
             break;
+
+        case GU_ACK_TAG:
+            if(requestId == myRequestId){
+                receivedAcks += 1;
+            }
+            break;
+
+        case GU_NACK_TAG:
+            if(requestId == myRequestId){
+                printf("--NACK group %d guide %d\n", myGroupId, myRequestedGuideId);
+                receivedNacks += 1;
+            }
+            break;
     }
 }
 
-void respondToPendingGroup(int **pendingRequests){
+void respondToPendingGroup(){
 
     int answer[MESSAGE_SIZE];
     
@@ -116,7 +179,7 @@ void respondToPendingGroup(int **pendingRequests){
         {                                   
             case FOR_GROUP:
                 
-                if (pendingRequests[i][LAMPORT_TIME] <= requestLamportTime || hasGroup == true)
+                if (pendingRequests[i][LAMPORT_TIME] <= myRequestLamportTime || hasGroup == true)
                 {
                     answer[REQUEST_ID] = pendingRequests[i][REQUEST_ID];
                     answer[GROUP_SIZE] = actualGroupSize;                
@@ -127,7 +190,7 @@ void respondToPendingGroup(int **pendingRequests){
                             MESSAGE_SIZE,              
                             MPI_INT,                                        
                             pendingRequests[i][MESSAGE_SIZE + ADDITIONAL_MESSAGE_SIZE - PENDING_REQUEST_MPI_SOURCE],    
-                            ACK_TAG,                                         
+                            GR_ACK_TAG,                                         
                             MPI_COMM_WORLD);                             
                     pendingRequests[i] = pendingRequests[numberOfPendingRequests-1];
                     numberOfPendingRequests -= 1;
@@ -138,57 +201,112 @@ void respondToPendingGroup(int **pendingRequests){
     }
 }
 
+void startTrip(int guideId){
+    guides[guideId].isBusy = true;
+    printf("START group %d with guide %d ACKS: %d NACKS: %d\n", myGroupId, guideId, receivedAcks, receivedNacks);
+}
 
-int main(int argc, char **argv)
-{
-    if (argc < 3){
-        printf("Not enough arguments\n");
-        exit(1);
+void searchForGuide(){
+    for( int guideId = 0; guideId < guidesCount; guideId++){
+        // Prepare for new guide request
+        myRequestId += 1;
+        receivedAcks = 0;
+        receivedNacks = 0;
+
+        // Request specified guide
+        askForGuide(guideId);
+
+        // Wait for acceptance of all the tourists
+        while(receivedAcks < numberOfTourists - 1
+                    && receivedNacks == 0){
+            // Receive ACKs / NACKs
+            handleMessages(pendingRequests);
+            if(receivedAcks == numberOfTourists - 1){
+                // Guide has been found
+                startTrip(guideId);
+                myRequestId += 1;
+                return;
+            }
+        }
     }
-    int numberOfTourists = atoi(argv[1]);
-    int maxGroupSize = atoi(argv[2]);
+}
 
+void init(int argc, char **argv){
+    numberOfTourists = atoi(argv[1]);
+    maxGroupSize = atoi(argv[2]);
+    guidesCount = atoi(argv[3]);
+
+    // Allocate array of guides
+    guides = (struct Guide*)malloc(guidesCount * sizeof(struct Guide)) ;
+    for( int row = 0; row < guidesCount; row++){
+        guides[row].isBusy = false;
+    }
 
     // allocate an "array of arrays" of int
     pendingRequests = (int**)malloc( PENDING_REQUESTS_SIZE * sizeof(int*) ) ;
-    // each entry in the array of arrays of int
-    // isn't allocated yet, so allocate it
-
     for( int row = 0 ; row < PENDING_REQUESTS_SIZE ; row++ )
     {
         pendingRequests[row] = (int*)malloc( (MESSAGE_SIZE + ADDITIONAL_MESSAGE_SIZE)*sizeof(int) ) ;
     }
-    // initializing values to send
+
+    //Initialize MPI
     MPI_Init(&argc, &argv);
     MPI_Status status;
     MPI_Comm_rank(MPI_COMM_WORLD, &processId);
     MPI_Comm_size(MPI_COMM_WORLD, &worldSize);
-    lamportTime = processId;
 
-    myBcast(MPI_INT, REQUEST_TAG, MPI_COMM_WORLD);
+    // Initialize lamport time
+    lamportTime = processId;
+}
+
+int main(int argc, char **argv)
+{
+    // Check arguments
+    if (argc < 4){
+        printf("Not enough arguments\n");
+        exit(1);
+    }
+
+    // Initialize importand data structures
+    init(argc, argv);
+
+    askForGroup();
 
     // Wait for all processes / tourists to accept the request
     while (receivedAcks < numberOfTourists - 1)
     {
-        handleMessages(pendingRequests);
+        handleMessages();
     }
 
     // Enter the group
     hasGroup = true;
     actualGroupSize += 1;
+    receivedAcks = 0;
+    myGroupId = actualGroupId;
+    printf("----I have a group: %d, actual group id: %d, group size: %d\n", processId, actualGroupId, actualGroupSize);
+    // If a process is the last to enter this group, it becomes a leader
+    bool isLeader = actualGroupSize == maxGroupSize ? true : false;
 
-    printf("Mam grupe __________________________________________%d, actual group id: %d, group size: %d\n", processId, actualGroupId, actualGroupSize);
-    
-    // If a process is the last to enter this group, become a leader
-    if (actualGroupSize >= maxGroupSize)
+    // Leder has to inform others about finished group and search for a guid
+    if (isLeader == true)
     {
         actualGroupId += 1;
         actualGroupSize = 0;
-    }
+        respondToPendingGroup();
 
-    while (1==1){
-        respondToPendingGroup(pendingRequests);
-        handleMessages(pendingRequests);
+        searchForGuide();
+    }
+    else{
+        respondToPendingGroup();
+
+        // Wait for start of the trip
+        while (myTripIsOn == false){
+            handleMessages();
+        }
+    }
+    
+    while (1 == 1){
+        handleMessages();
     }
     MPI_Finalize();
 }

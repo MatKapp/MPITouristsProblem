@@ -9,8 +9,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "handleMessages.h"
-
 typedef enum { false, true } bool;
 
 struct Guide{
@@ -38,7 +36,7 @@ struct Guide{
 
 #define GROUP_SIZE 2
 
-#define MESSAGE_SIZE 7
+#define MESSAGE_SIZE 8
 #define PENDING_REQUESTS_SIZE 100
 #define PENDING_REQUEST_REQUEST_TYPE 1
 #define PENDING_REQUEST_MPI_SOURCE 2

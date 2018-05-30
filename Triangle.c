@@ -30,6 +30,21 @@ bool checkGroupAvailability(int requestLamportTime, int source){
     return false;
 }
 
+void finishTrip(){
+    printf("My trip has finished %d group %d\n", processId, myGroupId);
+    // Clear variables to be prepared fot new trip
+    guides[myGuideId].isBusy = false;
+    myGuideId = -1;
+    myGroupId = -1;
+    myRequestedGuideId = -1;
+    actualGroupSize = 0;
+    hasGroup = false;  
+    myTripIsOn = false;
+    receivedAcks = 0;
+    receivedNacks = 0;
+    myRequestLamportTime = INT_MAX;
+}
+
 void myBcast(int *request, MPI_Datatype datatype, int tag, MPI_Comm communicator) 
 {
     // Increment lamport time and set request lamport time
@@ -72,6 +87,33 @@ void askForGuide(int guideId, int isWithNack){
     myBcast(request, MPI_INT, REQUEST_TAG, MPI_COMM_WORLD);
 }
 
+int randomTripEndTime(){
+    time_t now = time(NULL); 
+    return now + 1 + rand() % TRIP_MAX_DURATION;
+}
+
+bool randomTouristBeating(){
+    // Random a number in range 0..1mld
+    int random = rand() % 1000000000;
+    // Return true if prson has been beaten
+    if (random < T_BEAT_PROBABIITY){
+        return true;
+    }
+    return false;
+}
+
+bool randomGuideBeating(){
+    // Random a number in range 0..1mld
+    int random = rand() % 1000000000;
+    // Return true if person has been beaten
+    // Every tourist can observe guide beeing beatn, so we need to divide probability by numbr of tourists
+    int beatProbability = G_BEAT_PROBABIITY / worldSize;
+    if (random < beatProbability){
+        return true;
+    }
+    return false;
+}
+
 // Leader starts the trip and informs the others
 void startTrip(int guideId){
     guides[guideId].isBusy = true;
@@ -80,9 +122,8 @@ void startTrip(int guideId){
     printf("START process %d group %d with guide %d ACKS: %d NACKS: %d\n", 
         processId, myGroupId, guideId, receivedAcks, receivedNacks);
 
-    // Get current system time and determine the trip's end time
-    time_t now = time(NULL); 
-    myTripEndTime = now + 1 + rand() % TRIP_MAX_DURATION;
+    //Determine the trip's end time
+    myTripEndTime = randomTripEndTime();
 
     // Initialize request that will be sent
     int request[MESSAGE_SIZE];
@@ -93,6 +134,17 @@ void startTrip(int guideId){
 
     // Inform others about start of the trip
     myBcast(request, MPI_INT, TRIP_START_TAG, MPI_COMM_WORLD);
+}
+
+// If a tourist sees, that a guide is beaten, he informs others about it
+void informAboutGuideBeaten(){
+    // Initialize request that will be sent
+    int message[MESSAGE_SIZE];
+    message[GROUP_ID] = myGroupId;
+    message[GUIDE_ID] = myGuideId;
+
+    // Send message
+    myBcast(message, MPI_INT, GUIDE_BEATEN_TAG, MPI_COMM_WORLD);
 }
 
 // Respond with ACK if tag == ACK_TAG
@@ -209,7 +261,7 @@ void handleMessages()
                     }
                     else
                     {
-                        addRequestToPending(message, status, FOR_GROUP);
+                        addRequestToPending(message, source, FOR_GROUP);
                     }
                     break;
 
@@ -266,6 +318,12 @@ void handleMessages()
                 myGuideId = messageGuideId;
                 myTripEndTime = message[TRIP_END_TIME];
                 myTripIsOn = true;
+            }
+            break;
+
+        case GUIDE_BEATEN_TAG:
+            if (messageGroupId == myGroupId){
+                finishTrip();
             }
             break;
     }
@@ -333,20 +391,6 @@ int searchForGuide(){
         }
     }
     return waitForRandomGuide();
-}
-
-void finishTrip(){
-    // Clear variables to be prepared fot new trip
-    guides[myGuideId].isBusy = false;
-    myGuideId = -1;
-    myGroupId = -1;
-    myRequestedGuideId = -1;
-    actualGroupSize = 0;
-    hasGroup = false;  
-    myTripIsOn = false;
-    receivedAcks = 0;
-    receivedNacks = 0;
-    myRequestLamportTime = INT_MAX;
 }
 
 void init(int argc, char **argv){
@@ -421,12 +465,26 @@ void makeOneTrip(){
         }
     }
     
+    // Trip has been started
+    // Enjoy it until it lasts
     while (myTripIsOn == true){     
         activeWaiting();
 
+        // End the trip if tourist has been beaten
+        if (true == randomTouristBeating()){
+            printf("I've got beaten %d\n", processId);
+            finishTrip();
+        }
+
+        // End the trip and inform others if guide has been beaten
+        if (true == randomGuideBeating()){
+            printf("Guide got beaten %d %d\n", myGuideId, myGroupId);
+            informAboutGuideBeaten();
+            finishTrip();
+        }
+
         // Exit the trip if it has already finished
         if(time(NULL) > myTripEndTime){
-            printf("My trip has finished %d group %d\n", processId, myGroupId);
             finishTrip();
             break;
         }

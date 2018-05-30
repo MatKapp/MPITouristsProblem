@@ -38,6 +38,7 @@ struct Guide{
 #define GU_NACK_TAG 2
 #define REQUEST_TAG 3
 #define TRIP_START_TAG 4
+#define GUIDE_BEATEN_TAG 5
 
 
 #define MESSAGE_SIZE 9
@@ -46,6 +47,8 @@ struct Guide{
 
 #define TRIP_MAX_DURATION 4      // Seconds
 #define USLEEP 1000              // Milliseconds
+#define T_BEAT_PROBABIITY 40000     // Probability of tourist beeing beaten (in single step) multiplied by 1mld
+#define G_BEAT_PROBABIITY 1000000   // Probability of guide beeing beaten (in single step) multiplied by 1mld
 
 #define TRUE 1
 #define FALSE 0

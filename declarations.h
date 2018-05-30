@@ -9,6 +9,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "time.h"
+
 typedef enum { false, true } bool;
 
 struct Guide{
@@ -25,8 +27,11 @@ struct Guide{
 #define REQUEST_ID 3
 #define GUIDE_ID 4
 #define GROUP_ID 5
-#define TRIP_END_TIME 6
-#define IS_WITH_NACK 7
+#define GROUP_SIZE 6
+#define TRIP_END_TIME 7
+#define IS_WITH_NACK 8
+#define PENDING_REQUEST_REQUEST_TYPE 9
+#define PENDING_REQUEST_MPI_SOURCE 10
 
 #define GR_ACK_TAG 0
 #define GU_ACK_TAG 1
@@ -34,12 +39,9 @@ struct Guide{
 #define REQUEST_TAG 3
 #define TRIP_START_TAG 4
 
-#define GROUP_SIZE 2
 
-#define MESSAGE_SIZE 8
-#define PENDING_REQUESTS_SIZE 100
-#define PENDING_REQUEST_REQUEST_TYPE 1
-#define PENDING_REQUEST_MPI_SOURCE 2
+#define MESSAGE_SIZE 9
+#define PENDING_REQUESTS_SIZE 1000
 #define ADDITIONAL_MESSAGE_SIZE 2
 
 #define TRIP_MAX_DURATION 4      // Seconds
@@ -50,7 +52,6 @@ struct Guide{
 
 int myRequestId = 0;
 int myRequestedGuideId = -1;
-int numberOfGroups = 2;
 int lamportTime = INT_MAX;
 int myRequestLamportTime;
 bool hasGroup = false;

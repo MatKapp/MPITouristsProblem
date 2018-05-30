@@ -45,6 +45,7 @@ struct Guide{
 #define ADDITIONAL_MESSAGE_SIZE 2
 
 #define TRIP_MAX_DURATION 4      // Seconds
+#define USLEEP 1000              // Milliseconds
 
 #define TRUE 1
 #define FALSE 0

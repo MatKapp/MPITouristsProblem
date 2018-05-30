@@ -2,6 +2,7 @@
 
 
 bool checkGuideAvailability(int guideId, int requestLamportTime){
+    // Return false if I asked for the same guide and i have the priviledge
     if(myRequestedGuideId == guideId &&  myRequestLamportTime < requestLamportTime)
     {
         return false;
@@ -13,6 +14,21 @@ bool checkGuideAvailability(int guideId, int requestLamportTime){
     return true;
 }
 
+bool checkGroupAvailability(int requestLamportTime, int source){
+    if(requestLamportTime < myRequestLamportTime)
+    {
+        return true;
+    }
+    if(hasGroup == true)
+    {
+        return true;
+    }
+    if(requestLamportTime == myRequestLamportTime && source < processId)
+    {
+        return true;
+    }
+    return false;
+}
 
 void myBcast(int *request, MPI_Datatype datatype, int tag, MPI_Comm communicator) 
 {
@@ -56,7 +72,7 @@ void askForGuide(int guideId, int isWithNack){
     myBcast(request, MPI_INT, REQUEST_TAG, MPI_COMM_WORLD);
 }
 
-// Leader starts th trip and informs the others
+// Leader starts the trip and informs the others
 void startTrip(int guideId){
     guides[guideId].isBusy = true;
     myGuideId = guideId;
@@ -64,8 +80,7 @@ void startTrip(int guideId){
     printf("START process %d group %d with guide %d ACKS: %d NACKS: %d\n", 
         processId, myGroupId, guideId, receivedAcks, receivedNacks);
 
-    // Get current system time
-    // Determine trip end time
+    // Get current system time and determine the trip's end time
     time_t now = time(NULL); 
     myTripEndTime = now + 1 + rand() % TRIP_MAX_DURATION;
 
@@ -83,6 +98,7 @@ void startTrip(int guideId){
 // Respond with ACK if tag == ACK_TAG
 // Respond with NACK if tag == NACK_TAG
 void respond(int source, int requestId, int tag){
+    // Prepare the answer
     int answer[MESSAGE_SIZE];
     answer[LAMPORT_TIME] = lamportTime;
     answer[PROCESS_ID] = processId;
@@ -121,9 +137,7 @@ void respondToPending(){
         switch (pendingRequests[i][PENDING_REQUEST_REQUEST_TYPE])
         {                                   
             case FOR_GROUP:           
-                if (requestLamportTime < myRequestLamportTime 
-                    || hasGroup == true
-                    || (requestLamportTime == myRequestLamportTime && source < processId))
+                if (true == checkGroupAvailability(requestLamportTime, source))
                 {
                     // Respond with ACK
                     respond(source, requestId, GR_ACK_TAG);
@@ -142,14 +156,14 @@ void respondToPending(){
     }
 }
 
-void addRequestToPending(int *message, MPI_Status status, int requestType){
+void addRequestToPending(int *message, int source, int requestType){
     for (int i = 0; i < MESSAGE_SIZE; i++)
     {
         pendingRequests[numberOfPendingRequests][i] = message[i];
     }
     // Assign request type
     pendingRequests[numberOfPendingRequests][PENDING_REQUEST_REQUEST_TYPE] = requestType;
-    pendingRequests[numberOfPendingRequests][PENDING_REQUEST_MPI_SOURCE] = status.MPI_SOURCE;
+    pendingRequests[numberOfPendingRequests][PENDING_REQUEST_MPI_SOURCE] = source;
     numberOfPendingRequests += 1;
 }
 
@@ -171,10 +185,13 @@ void handleMessages()
         MPI_COMM_WORLD, 
         &status);
     int requestId = message[REQUEST_ID];
-    int guideId = message[GUIDE_ID];
+    int messageGuideId = message[GUIDE_ID];
+    int messageGroupId = message[GROUP_ID];
+    int messageLamportTime = message[LAMPORT_TIME];
+    int source = status.MPI_SOURCE;
     
-    // Increment lamport time
-    lamportTime = (lamportTime >= message[LAMPORT_TIME]) ? lamportTime : message[LAMPORT_TIME];
+    // Update lamport time
+    lamportTime = (lamportTime >= messageLamportTime) ? lamportTime : messageLamportTime;
     lamportTime += 1;
 
     // React to message
@@ -185,12 +202,10 @@ void handleMessages()
             switch (message[REQUEST_TYPE])
             {                    
                 case FOR_GROUP:
-                    if (message[LAMPORT_TIME] < myRequestLamportTime 
-                        || hasGroup == true
-                        || (message[LAMPORT_TIME] == myRequestLamportTime && message[PROCESS_ID] < processId))
+                    if (true == checkGroupAvailability(messageLamportTime, source))
                     {
                         // Respond with ACK
-                        respond(status.MPI_SOURCE, requestId, GR_ACK_TAG);
+                        respond(source, requestId, GR_ACK_TAG);
                     }
                     else
                     {
@@ -199,17 +214,17 @@ void handleMessages()
                     break;
 
                 case FOR_GUIDE:
-                    if(true == checkGuideAvailability(guideId, message[LAMPORT_TIME])){
+                    if(true == checkGuideAvailability(messageGuideId, messageLamportTime)){
                         // Respond with ACK
-                        respond(status.MPI_SOURCE, requestId, GU_ACK_TAG);
+                        respond(source, requestId, GU_ACK_TAG);
                     }
                     else{
                         if(message[IS_WITH_NACK] == TRUE){
                             // Respond with NACK
-                            respond(status.MPI_SOURCE, requestId, GU_NACK_TAG);
+                            respond(source, requestId, GU_NACK_TAG);
                         }
                         else{
-                            addRequestToPending(message, status, FOR_GUIDE);                            
+                            addRequestToPending(message, source, FOR_GUIDE);                            
                         }
                     }
                     break;
@@ -218,13 +233,13 @@ void handleMessages()
 
         case GR_ACK_TAG:
             // React to group acknowledge tag
-            if (message[GROUP_ID] == actualGroupId)
+            if (messageGroupId == actualGroupId)
             {
                 actualGroupSize = (actualGroupSize >= message[GROUP_SIZE]) ? actualGroupSize : message[GROUP_SIZE];
             }                  
             else
             {
-                if (message[GROUP_ID] > actualGroupId)
+                if (messageGroupId > actualGroupId)
                 {
                     actualGroupSize = message[GROUP_SIZE];
                     actualGroupId = message[GROUP_ID];
@@ -247,8 +262,8 @@ void handleMessages()
 
         case TRIP_START_TAG:
             // Reaction when my trip starts
-            if (message[GROUP_ID] == myGroupId){
-                myGuideId = guideId;
+            if (messageGroupId == myGroupId){
+                myGuideId = messageGuideId;
                 myTripEndTime = message[TRIP_END_TIME];
                 myTripIsOn = true;
             }
@@ -256,8 +271,10 @@ void handleMessages()
     }
 }
 
+// This function is used for active waiting for ACKS, NACKS, beginning or finish of the trip
+// It tries to handle all unhandled messages (received and not received)
 void activeWaiting(){
-    usleep(1000);
+    usleep(USLEEP);
     // Respond to pending first (as thy came earlier)
     respondToPending();  
     // Handle messages only if there is any message
@@ -269,6 +286,7 @@ void activeWaiting(){
 }
 
 int waitForRandomGuide(){
+    // Reset necessary variables
     myRequestId += 1;
     receivedAcks = 0;
     receivedNacks = 0;
@@ -276,7 +294,7 @@ int waitForRandomGuide(){
     // Get random guide id
     int guideId = rand() % guidesCount;
 
-    // Request specified guide
+    // Request specified guide without NACKS
     askForGuide(guideId, FALSE);
     printf("Insist on guide %d process %d\n", guideId, processId);
 
@@ -318,7 +336,7 @@ int searchForGuide(){
 }
 
 void finishTrip(){
-    // Clear variables
+    // Clear variables to be prepared fot new trip
     guides[myGuideId].isBusy = false;
     myGuideId = -1;
     myGroupId = -1;
@@ -340,6 +358,7 @@ void init(int argc, char **argv){
     guides = (struct Guide*)malloc(guidesCount * sizeof(struct Guide)) ;
     for( int row = 0; row < guidesCount; row++){
         guides[row].isBusy = false;
+        guides[row].isBeaten = false;
     }
 
     // allocate an "array of arrays" of int

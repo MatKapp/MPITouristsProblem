@@ -31,7 +31,7 @@ bool checkGroupAvailability(int requestLamportTime, int source){
 }
 
 void finishTrip(){
-    printf("My trip has finished! Process: %d group: %d\n", processId, myGroupId);
+    printf("My trip has finished! Process: %d group: %d lamportTime: %d\n", processId, myGroupId, lamportTime);
     // Clear variables to be prepared fot new trip
     guides[myGuideId].isBusy = false;
     myGuideId = -1;
@@ -89,7 +89,7 @@ void askForGuide(int guideId, int isWithNack){
 
 int randomTripEndTime(){
     time_t now = time(NULL); 
-    return now + 1 + rand() % TRIP_MAX_DURATION;
+    return now + TRIP_MAX_DURATION;//1 + rand() % TRIP_MAX_DURATION;
 }
 
 bool randomTouristBeating(){
@@ -119,8 +119,8 @@ void startTrip(int guideId){
     guides[guideId].isBusy = true;
     myGuideId = guideId;
     myTripIsOn = true;
-    printf("START TRIP! Process: %d group: %d with guide: %d ACKS: %d NACKS: %d\n", 
-        processId, myGroupId, guideId, receivedAcks, receivedNacks);
+    printf("START TRIP! Process: %d group: %d with guide: %d ACKS: %d NACKS: %d lamportTime: %d\n", 
+        processId, myGroupId, guideId, receivedAcks, receivedNacks, lamportTime);
 
     //Determine the trip's end time
     myTripEndTime = randomTripEndTime();
@@ -354,7 +354,7 @@ int waitForRandomGuide(){
 
     // Request specified guide without NACKS
     askForGuide(guideId, FALSE);
-    printf("Insist on guide! Guide: %d process: %d\n", guideId, processId);
+    printf("Insist on guide! Guide: %d process: %d lamportTime: %d\n", guideId, processId, lamportTime);
 
     // Wait for acceptance of all the tourists
     while(receivedAcks < numberOfTourists - 1){
@@ -441,7 +441,7 @@ void makeOneTrip(){
     receivedAcks = 0;
     myRequestLamportTime = INT_MAX;
     myGroupId = actualGroupId;
-    printf("----I have a group! Process: %d, group: %d, group size: %d\n", processId, actualGroupId, actualGroupSize);
+    printf("----I have a group! Process: %d, group: %d, group size: %d lamportTime: %d\n", processId, actualGroupId, actualGroupSize, lamportTime);
 
     // If a process is the last to enter this group, it becomes a leader
     bool isLeader = actualGroupSize == maxGroupSize ? true : false; 
@@ -472,13 +472,13 @@ void makeOneTrip(){
 
         // End the trip if tourist has been beaten
         if (true == randomTouristBeating()){
-            printf("I've got beaten! Process: %d\n", processId);
+            printf("I've got beaten! Process: %d lamportTime: %d\n", processId, lamportTime);
             finishTrip();
         }
 
         // End the trip and inform others if guide has been beaten
         if (true == randomGuideBeating()){
-            printf("Guide got beaten! Guide: %d %d\n", myGuideId, myGroupId);
+            printf("Guide got beaten! Guide: %d group: %d lamportTime: %d\n", myGuideId, myGroupId, lamportTime);
             informAboutGuideBeaten();
             finishTrip();
         }

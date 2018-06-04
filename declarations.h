@@ -46,7 +46,7 @@ struct Guide{
 #define ADDITIONAL_MESSAGE_SIZE 2
 
 #define TRIP_MAX_DURATION 4      // Seconds
-#define USLEEP 1000              // Milliseconds
+#define USLEEP 1000              // Microseconds
 #define T_BEAT_PROBABIITY 40000     // Probability of tourist beeing beaten (in single step) multiplied by 1mld
 #define G_BEAT_PROBABIITY 1000000   // Probability of guide beeing beaten (in single step) multiplied by 1mld
 
